@@ -8,6 +8,7 @@ use crate::cache::SourceCache;
 use crate::config::{AuthMode, Config};
 use crate::credentials::{OAuthCredential, StaticApiKeyCredential};
 use crate::error::{GrokSearchError, Result};
+use crate::logging::RequestTrace;
 use crate::model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
 };
@@ -757,6 +758,41 @@ impl SearchService {
             let encoded = Uuid::new_v4().simple().encode_lower(&mut uuid_buf);
             encoded[..12].to_string()
         };
+        let trace = RequestTrace::new(session_id.clone());
+        trace
+            .scope(self.web_search_traced(input, deadline, include_content, session_id))
+            .await
+    }
+
+    async fn web_search_traced(
+        &self,
+        input: WebSearchInput,
+        deadline: tokio::time::Instant,
+        include_content: bool,
+        session_id: String,
+    ) -> Result<WebSearchOutput> {
+        let effort = input
+            .reasoning_effort
+            .as_deref()
+            .or(self.config.reasoning_effort.as_deref())
+            .unwrap_or("-");
+        let model = input
+            .model
+            .as_deref()
+            .unwrap_or(self.default_model.as_str());
+        crate::logging::emit_current(
+            "start",
+            &[
+                ("query", &input.query),
+                ("model", model),
+                ("effort", effort),
+                (
+                    "include_content",
+                    if include_content { "true" } else { "false" },
+                ),
+            ],
+        );
+
         let effective_extra_sources = input
             .extra_sources
             .unwrap_or(self.config.default_extra_sources);
@@ -816,7 +852,10 @@ impl SearchService {
         // include_content alone would leave content populated at extra_sources=0
         // and break the legacy "summary + source list" shape.
         let merged = if include_content && effective_extra_sources > 0 {
-            enrich_sources(
+            let n = merged.len().min(self.config.max_inline_sources);
+            let n_s = n.to_string();
+            crate::logging::emit_current("enrich_start", &[("sources", &n_s)]);
+            let merged = enrich_sources(
                 merged,
                 deadline,
                 &self.http_client,
@@ -830,8 +869,11 @@ impl SearchService {
                 self.config.max_inline_sources,
                 self.active_sources(),
             )
-            .await
+            .await;
+            crate::logging::emit_current("enrich_end", &[("sources", &n_s)]);
+            merged
         } else {
+            crate::logging::emit_current("enrich_skip", &[]);
             merged
         };
 
@@ -848,6 +890,16 @@ impl SearchService {
             &mut out_sources,
             self.config.response_max_chars,
             &session_id,
+        );
+
+        let sources_s = sources_count.to_string();
+        crate::logging::emit_current(
+            "return",
+            &[
+                ("provider", "grok_responses"),
+                ("sources", &sources_s),
+                ("fallback", "false"),
+            ],
         );
 
         Ok(WebSearchOutput {
@@ -1036,7 +1088,10 @@ impl SearchService {
         // opt-out, which must be honored everywhere so callers who disabled inline
         // content never pay the extra fetch budget.
         let fallback = if include_content {
-            enrich_sources(
+            let n = fallback.len().min(self.config.max_inline_sources);
+            let n_s = n.to_string();
+            crate::logging::emit_current("enrich_start", &[("sources", &n_s)]);
+            let fallback = enrich_sources(
                 fallback,
                 deadline,
                 &self.http_client,
@@ -1050,8 +1105,11 @@ impl SearchService {
                 self.config.max_inline_sources,
                 self.active_sources(),
             )
-            .await
+            .await;
+            crate::logging::emit_current("enrich_end", &[("sources", &n_s)]);
+            fallback
         } else {
+            crate::logging::emit_current("enrich_skip", &[]);
             fallback
         };
 
@@ -1076,6 +1134,16 @@ impl SearchService {
             &mut out_sources,
             self.config.response_max_chars,
             &session_id,
+        );
+
+        let sources_s = sources_count.to_string();
+        crate::logging::emit_current(
+            "return",
+            &[
+                ("provider", "source_fallback"),
+                ("sources", &sources_s),
+                ("fallback", "true"),
+            ],
         );
 
         Ok(WebSearchOutput {

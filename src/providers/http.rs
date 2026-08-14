@@ -266,6 +266,7 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
     let mut chat_content = String::new();
     let mut last_json = None;
     let mut chat_metadata = None;
+    let mut first_event = true;
 
     while let Some(chunk) = response
         .chunk()
@@ -284,6 +285,7 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
                 &mut chat_metadata,
                 &mut output_text,
                 &mut chat_content,
+                &mut first_event,
             )? {
                 return Ok(value);
             }
@@ -299,6 +301,7 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
             &mut chat_metadata,
             &mut output_text,
             &mut chat_content,
+            &mut first_event,
         )? {
             return Ok(value);
         }
@@ -306,6 +309,7 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
 
     // Connection dropped (or idle cut) without a terminal completion event.
     // Discard any partial deltas — a half-built answer is not a result.
+    crate::logging::emit_current("grok_incomplete", &[("reason", "no response.completed")]);
     Err(GrokSearchError::Provider(format!(
         "{label} SSE stream ended incompletely (no response.completed)"
     )))
@@ -374,12 +378,27 @@ fn process_sse_event(
     chat_metadata: &mut Option<Value>,
     output_text: &mut String,
     chat_content: &mut String,
+    first_event: &mut bool,
 ) -> Result<Option<Value>> {
     let event = parse_sse_event(event, label)?;
     let named_completion = event.name.as_deref().is_some_and(is_completion_event_name);
     let data = event.data.as_deref().map(str::trim);
 
+    if *first_event && (event.name.is_some() || data.map(|d| !d.is_empty()).unwrap_or(false)) {
+        *first_event = false;
+        let first_name = event.name.clone().unwrap_or_else(|| {
+            data.and_then(|d| {
+                serde_json::from_str::<Value>(d)
+                    .ok()
+                    .and_then(|v| v.get("type").and_then(Value::as_str).map(str::to_string))
+            })
+            .unwrap_or_else(|| "-".into())
+        });
+        crate::logging::emit_current("grok_first", &[("event", &first_name)]);
+    }
+
     if named_completion && data.map(str::is_empty).unwrap_or(true) {
+        crate::logging::emit_current("grok_completed", &[("via", "named_empty")]);
         return finish_sse_state(label, last_json, chat_metadata, output_text, chat_content)
             .map(Some);
     }
@@ -391,6 +410,7 @@ fn process_sse_event(
         return Ok(None);
     }
     if data == "[DONE]" {
+        crate::logging::emit_current("grok_completed", &[("via", "done_marker")]);
         return finish_sse_state(label, last_json, chat_metadata, output_text, chat_content)
             .map(Some);
     }
@@ -408,6 +428,7 @@ fn process_sse_event(
     }
 
     if value.get("type").and_then(Value::as_str) == Some("response.completed") {
+        crate::logging::emit_current("grok_completed", &[("via", "response.completed")]);
         if let Some(response) = value.get("response") {
             return Ok(Some(response.clone()));
         }
@@ -421,6 +442,7 @@ fn process_sse_event(
 
     if named_completion {
         *last_json = Some(value);
+        crate::logging::emit_current("grok_completed", &[("via", "named")]);
         return finish_sse_state(label, last_json, chat_metadata, output_text, chat_content)
             .map(Some);
     }

@@ -4,6 +4,15 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+### Added
+
+- **Per-request operator log on stderr.** Each `web_search` emits one
+  line per phase (`start` / `grok_first` / `grok_completed` /
+  `grok_retry` / `grok_incomplete` / `enrich_start` / `enrich_end` /
+  `enrich_skip` / `return`) tagged with `sid=`. Query is truncated;
+  Bearer / `g2a_` secrets are redacted. HTTP daemon writes these to
+  the existing `logs/grok-search-rs.log`.
+
 ### Changed
 
 - **Grok Responses now requests SSE (`stream: true`) and stitches the

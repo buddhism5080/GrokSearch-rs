@@ -2,6 +2,7 @@ use crate::adapters::grok_responses_request::to_grok_responses_payload;
 use crate::adapters::grok_responses_response::parse_grok_responses;
 use crate::credentials::{CredentialProvider, StaticApiKeyCredential};
 use crate::error::{GrokSearchError, Result};
+use crate::logging;
 use crate::model::search::{SearchRequest, SearchResponse};
 use crate::providers::http::{build_client, post_json_with_status};
 use reqwest::Client;
@@ -102,7 +103,9 @@ impl GrokResponsesProvider {
             to_grok_responses_payload(request, self.require_web_search, self.include_x_search)?;
         let token = self.credential.bearer_token().await?;
         let started = tokio::time::Instant::now();
+        let mut attempt: u32 = 0;
         loop {
+            attempt += 1;
             match post_json_with_status(
                 &self.client,
                 &self.endpoint(),
@@ -115,6 +118,16 @@ impl GrokResponsesProvider {
                 Ok(raw) => return parse_grok_responses(&raw),
                 Err(failure) => {
                     if should_retry_grok(&failure.error, failure.status, started.elapsed()) {
+                        let status = failure
+                            .status
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "-".into());
+                        let err = failure.error.to_string();
+                        let n = attempt.to_string();
+                        logging::emit_current(
+                            "grok_retry",
+                            &[("attempt", &n), ("status", &status), ("err", &err)],
+                        );
                         // Tiny pause so a fast-failing upstream cannot busy-loop
                         // for the whole 120s window.
                         tokio::time::sleep(Duration::from_millis(200)).await;

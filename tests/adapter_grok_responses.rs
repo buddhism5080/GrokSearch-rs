@@ -25,6 +25,10 @@ fn grok_responses_payload_includes_web_search_by_default() {
     assert_eq!(payload["input"][1]["role"], "user");
     assert_eq!(payload["tools"][0]["type"], "web_search");
     assert_eq!(payload["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payload["stream"], true,
+        "Grok Responses must request SSE so the gateway can idle-timeout instead of holding a non-stream body"
+    );
     assert!(
         payload.get("reasoning").is_none(),
         "reasoning must be omitted when effort is unset"

@@ -284,9 +284,13 @@ event: done\n\n"
 }
 
 #[tokio::test]
-async fn post_json_parses_trailing_sse_event_at_eof() {
+async fn post_json_parses_trailing_completed_event_at_eof() {
+    // Delta is fully framed; completed arrives without a trailing blank line.
+    // EOF must still flush that last event so a well-formed stream succeeds.
     let chunks = vec![
-        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"trailing eof\"}".to_vec(),
+        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"trailing eof\"}\n\n\
+data: {\"type\":\"response.completed\"}"
+            .to_vec(),
     ];
     let base = spawn_closing_sse_server(false, chunks).await;
     let client = build_client(Duration::from_secs(5));
@@ -299,9 +303,38 @@ async fn post_json_parses_trailing_sse_event_at_eof() {
         "Grok Responses",
     )
     .await
-    .expect("EOF should flush the final SSE event even without blank-line delimiter");
+    .expect("EOF should flush the final completed event even without blank-line delimiter");
 
     assert_eq!(raw["output_text"], "trailing eof");
+}
+
+#[tokio::test]
+async fn post_json_discards_incomplete_sse_without_completed() {
+    let chunks = vec![b"event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"half answer\"}\n\n"
+        .to_vec()];
+    let base = spawn_closing_sse_server(false, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let err = post_json(
+        &client,
+        &format!("{}/v1/responses", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "input": "test", "stream": false}),
+        "Grok Responses",
+    )
+    .await
+    .expect_err("a cut stream must not be accepted as a successful answer");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("incomplete") || message.contains("without"),
+        "error must say the stream was incomplete, got: {message}"
+    );
+    assert!(
+        !message.contains("half answer"),
+        "discarded partial text must not leak into the error: {message}"
+    );
 }
 
 #[tokio::test]

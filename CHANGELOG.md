@@ -4,6 +4,18 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+### Changed
+
+- **Grok Responses now requests SSE (`stream: true`) and stitches the
+  stream server-side.** The MCP client still sees one assembled
+  `SearchResponse`. A cut / idle-dropped stream (no
+  `response.completed` / `[DONE]`) is discarded, not treated as a
+  successful half-answer. Retryable failures (transport, timeout,
+  incomplete stream, 429, 5xx) are retried without a count cap for the
+  first 120s of the Grok call; 401/400/403/404/422 and
+  `response.failed` / `response.incomplete` are not retried. Chat
+  Completions still sends `stream: false`.
+
 ### Added
 
 - **Reasoning intensity (`reasoning_effort`).** Clients can pass

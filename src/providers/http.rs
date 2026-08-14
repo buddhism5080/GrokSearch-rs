@@ -304,7 +304,11 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
         }
     }
 
-    finish_sse_json(label, last_json, chat_metadata, output_text, chat_content)
+    // Connection dropped (or idle cut) without a terminal completion event.
+    // Discard any partial deltas — a half-built answer is not a result.
+    Err(GrokSearchError::Provider(format!(
+        "{label} SSE stream ended incompletely (no response.completed)"
+    )))
 }
 
 struct SseEvent {

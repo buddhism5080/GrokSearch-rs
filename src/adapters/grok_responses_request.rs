@@ -46,7 +46,7 @@ pub fn to_grok_responses_payload(
         "model": req.model,
         "input": input,
         "tools": tools,
-        "stream": false
+        "stream": true
     });
     if let Some(effort) = req
         .reasoning_effort

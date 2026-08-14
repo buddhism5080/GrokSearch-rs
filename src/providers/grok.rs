@@ -1,12 +1,16 @@
 use crate::adapters::grok_responses_request::to_grok_responses_payload;
 use crate::adapters::grok_responses_response::parse_grok_responses;
 use crate::credentials::{CredentialProvider, StaticApiKeyCredential};
-use crate::error::Result;
+use crate::error::{GrokSearchError, Result};
 use crate::model::search::{SearchRequest, SearchResponse};
-use crate::providers::http::{build_client, post_json};
+use crate::providers::http::{build_client, post_json_with_status};
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// From the first Grok attempt, retryable failures may be retried until this
+/// window elapses. After it, the last error is returned as-is.
+pub const GROK_RETRY_WINDOW: Duration = Duration::from_secs(120);
 
 #[derive(Clone)]
 pub struct GrokResponsesProvider {
@@ -15,6 +19,25 @@ pub struct GrokResponsesProvider {
     credential: Arc<dyn CredentialProvider>,
     require_web_search: bool,
     include_x_search: bool,
+}
+
+/// Retry transport / incomplete-stream / 429 / 5xx while still inside
+/// [`GROK_RETRY_WINDOW`]. Client errors and terminal `response.failed` do not retry.
+pub fn should_retry_grok(err: &GrokSearchError, status: Option<u16>, elapsed: Duration) -> bool {
+    if elapsed >= GROK_RETRY_WINDOW {
+        return false;
+    }
+    if matches!(status, Some(400 | 401 | 403 | 404 | 422)) {
+        return false;
+    }
+    match err {
+        GrokSearchError::Timeout(_) => true,
+        GrokSearchError::Provider(msg) => {
+            !msg.contains("response.failed")
+                && !msg.contains("stream ended with response.incomplete")
+        }
+        _ => false,
+    }
 }
 
 impl GrokResponsesProvider {
@@ -78,14 +101,28 @@ impl GrokResponsesProvider {
         let payload =
             to_grok_responses_payload(request, self.require_web_search, self.include_x_search)?;
         let token = self.credential.bearer_token().await?;
-        let raw = post_json(
-            &self.client,
-            &self.endpoint(),
-            &token,
-            &payload,
-            "Grok Responses",
-        )
-        .await?;
-        parse_grok_responses(&raw)
+        let started = tokio::time::Instant::now();
+        loop {
+            match post_json_with_status(
+                &self.client,
+                &self.endpoint(),
+                &token,
+                &payload,
+                "Grok Responses",
+            )
+            .await
+            {
+                Ok(raw) => return parse_grok_responses(&raw),
+                Err(failure) => {
+                    if should_retry_grok(&failure.error, failure.status, started.elapsed()) {
+                        // Tiny pause so a fast-failing upstream cannot busy-loop
+                        // for the whole 120s window.
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    }
+                    return Err(failure.error);
+                }
+            }
+        }
     }
 }

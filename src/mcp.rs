@@ -306,7 +306,7 @@ fn tools_list() -> Value {
             },
             {
                 "name": "web_fetch",
-                "description": "Use when you already have a specific URL and want to read a single page in depth. GitHub issue/PR, StackOverflow (StackExchange), arXiv, and Wikipedia URLs are automatically parsed into structured, de-noised Markdown ready to feed an LLM; all other pages fall back to generic extraction. Returns {url, content, original_length, truncated, source_type, fallback_reason?}. If you don't have a URL yet and need to discover sources, use web_search instead.",
+                "description": "Use when you already have a specific URL and want to read a single page in depth. GitHub issue/PR, StackOverflow (StackExchange), arXiv, and Wikipedia URLs are automatically parsed into structured, de-noised Markdown ready to feed an LLM; all other pages fall back to generic extraction. Hard 60s timeout for the whole call (independent of GROK_SEARCH_TIMEOUT_SECONDS). Returns {url, content, original_length, truncated, source_type, fallback_reason?}. If you don't have a URL yet and need to discover sources, use web_search instead.",
                 "inputSchema": {
                     "type": "object",
                     "required": ["url"],
@@ -546,6 +546,10 @@ mod tests {
         assert!(web_fetch.contains("arXiv"), "web_fetch: {web_fetch}");
         assert!(web_fetch.contains("Wikipedia"), "web_fetch: {web_fetch}");
         assert!(web_fetch.contains("web_search"), "web_fetch: {web_fetch}");
+        assert!(
+            web_fetch.contains("60s"),
+            "web_fetch must name the 60s cap: {web_fetch}"
+        );
 
         // get_sources: reuses a prior web_search session, runs no new search.
         let get_sources = desc("get_sources");

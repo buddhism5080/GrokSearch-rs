@@ -193,7 +193,7 @@ Notes:
 | `EXA_API_KEY` | unset | Enables Exa (semantic search, native filters) in the chain. |
 | `GROK_SEARCH_SOURCE_PROVIDERS` | unset | Explicit chain order, e.g. `tinyfish,tavily,firecrawl`. Unset = canonical order `tavily, exa, tinyfish, firecrawl` over configured providers. |
 | `GROK_SEARCH_CACHE_SIZE` | `256` | Max cached `web_search` sessions. |
-| `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for all upstreams. |
+| `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | Shared deadline for `web_search` (Grok + source chain + inline enrich). `web_fetch` ignores this and is hard-capped at 60s. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default char cap on `web_fetch`. |
 | `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Max `web_search` sources carrying inline content; the rest are metadata‑only. |
 | `GROK_SEARCH_RESPONSE_MAX_CHARS` | `45000` | Whole‑response char budget for `web_search`; over‑budget output is truncated tail‑first with `truncated: true`. Sized to keep the serialized result under the MCP client token ceiling (Claude Code default `MAX_MCP_OUTPUT_TOKENS=25000`). |

@@ -1199,11 +1199,12 @@ impl SearchService {
 
     pub async fn web_fetch(&self, url: &str, max_chars: Option<usize>) -> Result<WebFetchOutput> {
         let effective_limit = max_chars.or(self.config.fetch_max_chars);
-        // D-02, as on the web_search path: one deadline for the whole call.
-        // The specialist attempt and every generic-chain provider draw from
-        // the same budget, so a slow specialist followed by a slow chain
-        // cannot spend a full GROK_SEARCH_TIMEOUT_SECONDS apiece.
-        let deadline = tokio::time::Instant::now() + self.config.timeout;
+        // Direct web_fetch is a hard 60s cap (`WEB_FETCH_TIMEOUT`), not the
+        // search budget. Specialist + generic chain still share that one
+        // deadline (D-02) so a slow specialist cannot then give every chain
+        // provider another full 60s. Search-time enrich keeps using
+        // `self.config.timeout`.
+        let deadline = tokio::time::Instant::now() + crate::config::WEB_FETCH_TIMEOUT;
 
         let (content, source_type, fallback_reason) = match url::Url::parse(url) {
             Ok(parsed) => {
@@ -1235,7 +1236,7 @@ impl SearchService {
                     // is another path left to try.
                     Err(_elapsed) => {
                         return Err(GrokSearchError::Timeout(format!(
-                            "web_fetch timed out extracting {url} (GROK_SEARCH_TIMEOUT_SECONDS)"
+                            "web_fetch timed out extracting {url} (60s cap)"
                         )))
                     }
                 }
@@ -1265,7 +1266,7 @@ impl SearchService {
         match tokio::time::timeout_at(deadline, generic_source_fetch(&chain, url)).await {
             Ok(result) => result.map(|page| page.content),
             Err(_elapsed) => Err(GrokSearchError::Timeout(format!(
-                "web_fetch timed out fetching {url} through the source chain (GROK_SEARCH_TIMEOUT_SECONDS)"
+                "web_fetch timed out fetching {url} through the source chain (60s cap)"
             ))),
         }
     }
@@ -1387,6 +1388,7 @@ impl SearchService {
             "fallback_sources": self.config.fallback_sources,
             "cache_size": self.config.cache_size,
             "timeout_seconds": self.config.timeout.as_secs(),
+            "web_fetch_timeout_seconds": crate::config::WEB_FETCH_TIMEOUT.as_secs(),
             "github_token": self.config.github_token_status(),
             "redacted": self.config.redacted_diagnostics()
         })
@@ -2045,7 +2047,7 @@ mod chain_tests {
             Ok(Vec::new())
         }
         async fn fetch(&self, _url: &str) -> Result<FetchedPage> {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             Ok(FetchedPage::text("never reached"))
         }
         async fn map(&self, _url: &str, _max_results: usize) -> Result<Vec<Source>> {
@@ -2053,10 +2055,11 @@ mod chain_tests {
         }
     }
 
-    // D-02 on the direct web_fetch path: two hanging chain providers must
-    // share one request budget, not take a full client timeout each.
-    #[tokio::test]
-    async fn web_fetch_chain_is_bounded_by_one_deadline() {
+    // Direct web_fetch uses a hard 60s budget, independent of
+    // GROK_SEARCH_TIMEOUT_SECONDS (search + enrich still share that one).
+    // Two hanging chain providers still share the one 60s budget (D-02).
+    #[tokio::test(start_paused = true)]
+    async fn web_fetch_is_capped_at_60s_independent_of_search_timeout() {
         let config = Config::from_env_map([
             ("GROK_SEARCH_API_KEY", "fake"),
             ("GROK_SEARCH_TIMEOUT_SECONDS", "1"),
@@ -2079,20 +2082,39 @@ mod chain_tests {
             http_client: crate::providers::http::build_client(std::time::Duration::from_secs(5)),
             source_router: Arc::new(crate::sources::SourceRouter::default()),
         };
-        let started = std::time::Instant::now();
+        let wall = std::time::Instant::now();
+        let paused_start = tokio::time::Instant::now();
         let err = svc
             .web_fetch("https://example.com/page", None)
             .await
             .expect_err("hanging chain must time out");
+        let paused = paused_start.elapsed();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "web_fetch must be cut at the ~1s deadline, took {:?}",
-            started.elapsed()
+            paused >= std::time::Duration::from_secs(60),
+            "web_fetch must wait the 60s cap, not the 1s search timeout; paused {paused:?}"
         );
         assert!(
-            matches!(err, GrokSearchError::Timeout(_)),
-            "expected a Timeout error, got: {err:?}"
+            paused < std::time::Duration::from_secs(61),
+            "two hanging providers must share one 60s budget, not 120s; paused {paused:?}"
         );
+        assert!(
+            wall.elapsed() < std::time::Duration::from_secs(2),
+            "paused time must not block the wall clock, took {:?}",
+            wall.elapsed()
+        );
+        match err {
+            GrokSearchError::Timeout(msg) => {
+                assert!(
+                    msg.contains("60s"),
+                    "timeout must name the 60s web_fetch cap, got: {msg}"
+                );
+                assert!(
+                    !msg.contains("GROK_SEARCH_TIMEOUT_SECONDS"),
+                    "must not blame the search timeout env: {msg}"
+                );
+            }
+            other => panic!("expected a Timeout error, got: {other:?}"),
+        }
     }
 
     // web_map is a dedicated Tavily capability: excluding Tavily from the

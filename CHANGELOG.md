@@ -15,6 +15,11 @@ All notable changes to GrokSearch-rs are documented here.
 
 ### Changed
 
+- **`web_fetch` is a hard 60s cap, independent of
+  `GROK_SEARCH_TIMEOUT_SECONDS`.** Specialist extract + the generic
+  source chain still share that one 60s budget (D-02). `web_search`
+  inline enrich continues to draw from the search deadline.
+
 - **Grok Responses now requests SSE (`stream: true`) and stitches the
   stream server-side.** The MCP client still sees one assembled
   `SearchResponse`. A cut / idle-dropped stream (no

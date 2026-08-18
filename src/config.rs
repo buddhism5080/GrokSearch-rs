@@ -4,6 +4,11 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+/// Hard cap for the MCP `web_fetch` tool. Independent of
+/// [`Config::timeout`] / `GROK_SEARCH_TIMEOUT_SECONDS`, which still bound
+/// `web_search` (Grok + source chain + inline enrich).
+pub const WEB_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Responses,

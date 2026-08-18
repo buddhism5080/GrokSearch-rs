@@ -160,7 +160,7 @@ Semantic (embeddings-first) search with native `includeDomains` / `excludeDomain
 
 ## Source chain
 
-Supplemental sources and generic (non-specialist) fetch walk an ordered provider chain; the first provider with usable output wins and later ones are pure fallback. Providers that cannot honor domain/recency filters (Firecrawl) are skipped for filtered requests. The whole chain shares one request deadline (`GROK_SEARCH_TIMEOUT_SECONDS`) — a slow provider cannot multiply the budget by the chain length.
+Supplemental sources and generic (non-specialist) fetch walk an ordered provider chain; the first provider with usable output wins and later ones are pure fallback. Providers that cannot honor domain/recency filters (Firecrawl) are skipped for filtered requests. On `web_search` the whole chain shares one request deadline (`GROK_SEARCH_TIMEOUT_SECONDS`) — a slow provider cannot multiply the budget by the chain length. Direct `web_fetch` ignores that setting and uses a hard **60s** cap instead (specialist + chain still share that one 60s).
 
 `web_map` is a separate capability, not part of this chain: it always uses Tavily whenever `TAVILY_API_KEY` is configured, even when the chain excludes Tavily.
 
@@ -173,7 +173,8 @@ Supplemental sources and generic (non-specialist) fetch walk an ordered provider
 | Variable | Default | Description |
 |---|---|---|
 | `GROK_SEARCH_CACHE_SIZE` | `256` | Maximum cached search sessions for `get_sources`. |
-| `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for Grok, Tavily, and Firecrawl requests. |
+| `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | Shared deadline for `web_search` (Grok + source chain + inline enrich). Does **not** apply to the `web_fetch` tool. |
+| *(hardcoded)* | `60` | `web_fetch` total timeout. Not configurable; specialist + generic chain share this one budget. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default character cap on `web_fetch` content. Overridden per call by `max_chars`. Unset means no truncation. |
 
 ## Source extraction

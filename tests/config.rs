@@ -171,6 +171,16 @@ fn config_reads_timeout_seconds() {
 }
 
 #[test]
+fn web_fetch_timeout_is_hardcoded_60s_and_ignores_search_timeout() {
+    let cfg = Config::from_env_map([
+        ("GROK_SEARCH_API_KEY", "grok-test-key"),
+        ("GROK_SEARCH_TIMEOUT_SECONDS", "480"),
+    ]);
+    assert_eq!(cfg.timeout.as_secs(), 480);
+    assert_eq!(config::WEB_FETCH_TIMEOUT.as_secs(), 60);
+}
+
+#[test]
 fn invalid_source_counts_fall_back_to_safe_defaults() {
     let cfg = Config::from_env_map([
         ("GROK_SEARCH_API_KEY", "grok-test-key"),

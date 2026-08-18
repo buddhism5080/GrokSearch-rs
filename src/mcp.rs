@@ -238,7 +238,7 @@ fn tools_list() -> Value {
         "tools": [
             {
                 "name": "web_search",
-                "description": "Use for discovery — when you don't have a specific URL and need to find information, debug an error, research a topic, or track down an issue or news item. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only — drill into any of them with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=\"concise\" for answer + source metadata only. If you already know the exact page URL, use web_fetch instead.",
+                "description": "Powerful multi-agent deep search. Use for discovery when you don't have a specific URL and need to find information, debug an error, research a topic, or track down an issue or news item. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only — drill into any of them with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=\"concise\" for answer + source metadata only. If you already know the exact page URL, use web_fetch instead. Set reasoning_effort: simple fact lookup → low (enough); comparisons / contradictions / multi-source research → high or xhigh. Omit to use the server default.",
                 "inputSchema": {
                     "type": "object",
                     "required": ["query"],
@@ -277,7 +277,7 @@ fn tools_list() -> Value {
                         "reasoning_effort": {
                             "type": "string",
                             "enum": ["low", "medium", "high", "xhigh"],
-                            "description": "Optional per-call reasoning intensity for the Grok / OpenAI-compatible upstream. Responses sends reasoning.effort; chat-completions sends top-level reasoning_effort. low/medium/high are depth knobs; xhigh is multi-agent scale (e.g. grok-4.20-multi-agent). When omitted, uses GROK_SEARCH_REASONING_EFFORT / X-Grok-Reasoning-Effort, else the provider default."
+                            "description": "Per-call reasoning intensity for the Grok / OpenAI-compatible upstream. This tool is a powerful multi-agent deep search; higher effort scales agent count and latency, not answer length. low — simple fact lookup and known-part / official-page checks (enough for most lookups). medium — ordinary multi-source retrieval. high — comparisons, conflicting specs, multi-step research. xhigh — maximum multi-agent scale (e.g. grok-4.20-multi-agent). When omitted, uses the server default (GROK_SEARCH_REASONING_EFFORT / X-Grok-Reasoning-Effort).",
                         }
                     }
                 }
@@ -528,6 +528,38 @@ mod tests {
         assert!(
             !web_search.contains("read a single page"),
             "web_search must not claim the single-page-read role: {web_search}"
+        );
+        assert!(
+            web_search.contains("multi-agent"),
+            "web_search must name itself as multi-agent search: {web_search}"
+        );
+        assert!(
+            web_search.contains("simple fact lookup"),
+            "web_search must steer simple lookups to low: {web_search}"
+        );
+
+        let effort = {
+            let tools = listed["tools"].as_array().expect("tools array");
+            tools
+                .iter()
+                .find(|t| t["name"] == "web_search")
+                .expect("web_search")["inputSchema"]["properties"]["reasoning_effort"]
+                ["description"]
+                .as_str()
+                .expect("reasoning_effort description")
+                .to_string()
+        };
+        assert!(
+            effort.contains("simple fact lookup"),
+            "reasoning_effort must say low is enough for fact lookup: {effort}"
+        );
+        assert!(
+            effort.contains("server default"),
+            "reasoning_effort must point omit at the server default: {effort}"
+        );
+        assert!(
+            !effort.contains("this host"),
+            "schema must not bake in this-host defaults: {effort}"
         );
 
         // web_fetch: targeted single-page read, names all four special

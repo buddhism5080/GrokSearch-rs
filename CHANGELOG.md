@@ -15,6 +15,12 @@ All notable changes to GrokSearch-rs are documented here.
 
 ### Changed
 
+- **`web_search` schema now names the tool as multi-agent deep search
+  and steers simple fact lookup to `reasoning_effort=low`.** The
+  parameter description maps low/medium/high/xhigh; omit still uses
+  the server default (`GROK_SEARCH_REASONING_EFFORT` /
+  `X-Grok-Reasoning-Effort`).
+
 - **`web_fetch` is a hard 60s cap, independent of
   `GROK_SEARCH_TIMEOUT_SECONDS`.** Specialist extract + the generic
   source chain still share that one 60s budget (D-02). `web_search`

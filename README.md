@@ -135,7 +135,7 @@ The tables below use env-key names (they also drive `config.toml` / stdio); on t
 | `GROK_SEARCH_AUTH_FILE` | `<home>/.config/grok-search-rs/auth.json` | Optional OAuth token file override. |
 | `GROK_SEARCH_URL` | `https://api.x.ai` | Root, `/v1`, or full‑endpoint URL. |
 | `GROK_SEARCH_MODEL` | `grok-4-1-fast-reasoning` | Model name. |
-| `GROK_SEARCH_REASONING_EFFORT` | — *(provider default)* | `low`/`medium`/`high`/`xhigh`. Also overridable via `web_search.reasoning_effort` or `X-Grok-Reasoning-Effort`. |
+| `GROK_SEARCH_REASONING_EFFORT` | — *(provider default)* | `low`/`medium`/`high`/`xhigh`. Simple fact lookup → `low`. Also overridable via `web_search.reasoning_effort` or `X-Grok-Reasoning-Effort`. |
 | `GROK_SEARCH_WEB_SEARCH` | `true` | Offer `web_search` tool to Grok. |
 | `GROK_SEARCH_X_SEARCH` | `false` | Offer `x_search` tool (X/Twitter) to Grok. |
 

@@ -24,6 +24,7 @@ fn sample_request() -> SearchRequest {
         }],
         tools: vec![SearchTool::web_search()],
         reasoning_effort: Some("medium".into()),
+        fast: false,
     }
 }
 

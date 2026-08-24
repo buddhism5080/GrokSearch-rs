@@ -40,6 +40,7 @@ async fn full_service_web_search_via_chat_completions() {
             include_content: None,
             response_format: None,
             reasoning_effort: None,
+            fast: None,
         })
         .await
         .expect("web_search");

@@ -12,6 +12,7 @@ fn sample_request() -> SearchRequest {
         }],
         tools: vec![SearchTool::web_search()],
         reasoning_effort: None,
+        fast: false,
     }
 }
 
@@ -36,6 +37,21 @@ fn payload_includes_reasoning_effort_when_set() {
     req.reasoning_effort = Some("high".into());
     let payload = to_chat_completions_payload(&req, "grok-4.3-fast", true);
     assert_eq!(payload["reasoning_effort"], "high");
+}
+
+#[test]
+fn payload_fast_mode_pins_model_and_omits_reasoning_effort() {
+    let mut req = sample_request();
+    req.model = "operator-model".into();
+    req.reasoning_effort = Some("high".into());
+    req.apply_fast_mode();
+    let payload = to_chat_completions_payload(&req, "operator-model", true);
+    assert_eq!(payload["model"], "grok-chat-fast");
+    assert!(
+        payload.get("reasoning_effort").is_none(),
+        "fast mode must omit reasoning_effort, got {:?}",
+        payload.get("reasoning_effort")
+    );
 }
 
 #[test]

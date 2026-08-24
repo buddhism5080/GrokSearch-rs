@@ -1,5 +1,5 @@
 use crate::error::{GrokSearchError, Result};
-use crate::model::search::{ContentBlock, SearchRequest};
+use crate::model::search::{ContentBlock, SearchRequest, FAST_MODEL};
 use serde_json::{json, Value};
 
 pub fn to_grok_responses_payload(
@@ -34,6 +34,10 @@ pub fn to_grok_responses_payload(
         input.push(json!({ "role": message.role, "content": content }));
     }
 
+    // Web Fast (`grok-chat-fast`) already runs hosted web/X search; sending
+    // `x_search` is a 400 (`invalid_tools`) on grok2api Web.
+    let include_x_search = include_x_search && !req.fast;
+
     let mut tools = Vec::new();
     if require_web_search {
         tools.push(json!({ "type": "web_search" }));
@@ -42,21 +46,29 @@ pub fn to_grok_responses_payload(
         tools.push(json!({ "type": "x_search" }));
     }
 
+    let model = if req.fast {
+        FAST_MODEL
+    } else {
+        req.model.as_str()
+    };
+
     let mut payload = json!({
-        "model": req.model,
+        "model": model,
         "input": input,
         "tools": tools,
         "stream": true
     });
-    if let Some(effort) = req
-        .reasoning_effort
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        // xAI Responses API: nested `reasoning.effort` (chat uses top-level
-        // `reasoning_effort` — see chat_completions_request).
-        payload["reasoning"] = json!({ "effort": effort });
+    if !req.fast {
+        if let Some(effort) = req
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            // xAI Responses API: nested `reasoning.effort` (chat uses top-level
+            // `reasoning_effort` — see chat_completions_request).
+            payload["reasoning"] = json!({ "effort": effort });
+        }
     }
     Ok(payload)
 }

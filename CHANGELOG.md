@@ -6,6 +6,14 @@ All notable changes to GrokSearch-rs are documented here.
 
 ### Added
 
+- **Web Fast mode (`web_search.fast`).** `fast=true` pins `grok-chat-fast`,
+  omits `reasoning.effort` / `reasoning_effort`, and omits the `x_search`
+  tool (grok2api Web already runs hosted web/X search; sending `x_search`
+  is `invalid_tools`). Precedence: tool arg `fast` > header `X-Grok-Fast` >
+  env `GROK_SEARCH_FAST` / TOML `fast` (default false). `fast=true` wins
+  over `reasoning_effort` if both are set. `doctor` reports `grok.fast`
+  and `grok.fast_model`.
+
 - **Per-request operator log on stderr.** Each `web_search` emits one
   line per phase (`start` / `grok_first` / `grok_completed` /
   `grok_retry` / `grok_incomplete` / `enrich_start` / `enrich_end` /

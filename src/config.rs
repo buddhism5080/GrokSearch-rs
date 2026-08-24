@@ -66,6 +66,9 @@ pub struct Config {
     /// `None` = omit the field (provider default). Values:
     /// `low` | `medium` | `high` | `xhigh`.
     pub reasoning_effort: Option<String>,
+    /// Operator default for Web Fast mode. Per-call `web_search.fast` and
+    /// `X-Grok-Fast` override this. Default false (Console / configured model).
+    pub fast: bool,
 }
 
 /// Hand-written `Debug` that masks secret-bearing fields so a stray
@@ -123,6 +126,7 @@ impl std::fmt::Debug for Config {
             .field("max_inline_sources", &self.max_inline_sources)
             .field("response_max_chars", &self.response_max_chars)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("fast", &self.fast)
             .finish()
     }
 }
@@ -169,6 +173,7 @@ struct ConfigFile {
     max_inline_sources: Option<usize>,
     response_max_chars: Option<usize>,
     reasoning_effort: Option<String>,
+    fast: Option<bool>,
 }
 
 impl ConfigFile {
@@ -266,6 +271,7 @@ impl ConfigFile {
             self.response_max_chars.map(|n| n.to_string()),
         );
         insert("GROK_SEARCH_REASONING_EFFORT", self.reasoning_effort);
+        insert("GROK_SEARCH_FAST", self.fast.map(|b| b.to_string()));
         out
     }
 }
@@ -400,6 +406,7 @@ impl Config {
             max_inline_sources: usize_value(&map, "GROK_SEARCH_MAX_INLINE_SOURCES", 5),
             response_max_chars: usize_value(&map, "GROK_SEARCH_RESPONSE_MAX_CHARS", 45_000),
             reasoning_effort: reasoning_effort_value(&map, "GROK_SEARCH_REASONING_EFFORT"),
+            fast: bool_value(&map, "GROK_SEARCH_FAST", false),
         }
     }
 
@@ -415,7 +422,7 @@ impl Config {
 
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} reasoning_effort={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} tinyfish_api_key={} exa_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} github_token={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} reasoning_effort={} fast={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} tinyfish_api_key={} exa_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} github_token={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
             self.grok_auth_mode,
@@ -425,6 +432,7 @@ impl Config {
                 .unwrap_or_else(|| "default".to_string()),
             self.grok_model,
             self.reasoning_effort.as_deref().unwrap_or("unset"),
+            self.fast,
             self.web_search_enabled,
             self.x_search_enabled,
             redact(self.tavily_api_key.as_deref()),
@@ -557,6 +565,7 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # ── Common knobs ──────────────────────────────────────────────
 # grok_model         = "grok-4-1-fast-reasoning"
 # reasoning_effort   = "high"         # low|medium|high|xhigh (omit = provider default)
+# fast               = false          # true → grok-chat-fast, no reasoning, no x_search
 # x_search_enabled   = false          # Grok X/Twitter search tool
 # firecrawl_api_key  = "fc-..."       # Optional fetch fallback   https://firecrawl.dev
 # tinyfish_api_key   = "tf-..."       # Optional free search/fetch  https://tinyfish.ai
@@ -721,6 +730,11 @@ pub fn parse_reasoning_effort(raw: &str) -> Option<String> {
         "low" | "medium" | "high" | "xhigh" => Some(value),
         _ => None,
     }
+}
+
+/// Per-call Fast flag wins over the operator default. `None` = use config.
+pub fn resolve_fast(tool_arg: Option<bool>, config_fast: bool) -> bool {
+    tool_arg.unwrap_or(config_fast)
 }
 
 fn u64_value(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {

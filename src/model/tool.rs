@@ -23,6 +23,10 @@ pub struct WebSearchInput {
     /// `xhigh`. When set, beats the server default
     /// (`GROK_SEARCH_REASONING_EFFORT` / `X-Grok-Reasoning-Effort`).
     pub reasoning_effort: Option<String>,
+    /// Per-call Web Fast mode. `Some(true)` pins `grok-chat-fast`, drops
+    /// reasoning, and drops `x_search`. `Some(false)` forces the operator
+    /// model even if `GROK_SEARCH_FAST` is on. `None` uses the server default.
+    pub fast: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -5,12 +5,13 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::cache::SourceCache;
-use crate::config::{AuthMode, Config};
+use crate::config::{resolve_fast, AuthMode, Config};
 use crate::credentials::{OAuthCredential, StaticApiKeyCredential};
 use crate::error::{GrokSearchError, Result};
 use crate::logging::RequestTrace;
 use crate::model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
+    FAST_MODEL,
 };
 use crate::model::source::{is_junk_title, merge_sources, FetchedPage, Source};
 use crate::model::tool::{GetSourcesOutput, WebFetchOutput, WebSearchInput, WebSearchOutput};
@@ -771,21 +772,31 @@ impl SearchService {
         include_content: bool,
         session_id: String,
     ) -> Result<WebSearchOutput> {
-        let effort = input
-            .reasoning_effort
-            .as_deref()
-            .or(self.config.reasoning_effort.as_deref())
-            .unwrap_or("-");
-        let model = input
-            .model
-            .as_deref()
-            .unwrap_or(self.default_model.as_str());
+        let fast = resolve_fast(input.fast, self.config.fast);
+        let effort = if fast {
+            "-"
+        } else {
+            input
+                .reasoning_effort
+                .as_deref()
+                .or(self.config.reasoning_effort.as_deref())
+                .unwrap_or("-")
+        };
+        let model = if fast {
+            FAST_MODEL
+        } else {
+            input
+                .model
+                .as_deref()
+                .unwrap_or(self.default_model.as_str())
+        };
         crate::logging::emit_current(
             "start",
             &[
                 ("query", &input.query),
                 ("model", model),
                 ("effort", effort),
+                ("fast", if fast { "true" } else { "false" }),
                 (
                     "include_content",
                     if include_content { "true" } else { "false" },
@@ -1355,6 +1366,8 @@ impl SearchService {
                 "web_search_enabled": self.config.web_search_enabled,
                 "x_search_enabled": ai_x_search_enabled,
                 "reasoning_effort": self.config.reasoning_effort,
+                "fast": self.config.fast,
+                "fast_model": FAST_MODEL,
                 "reachable": grok_probe.ok,
                 "detail": grok_probe.detail,
             },
@@ -1421,7 +1434,7 @@ impl SearchService {
         if self.config.web_search_enabled {
             tools.push(SearchTool::web_search());
         }
-        let request = SearchRequest {
+        let mut request = SearchRequest {
             model: self.default_model.clone(),
             system: None,
             messages: vec![SearchMessage {
@@ -1430,7 +1443,11 @@ impl SearchService {
             }],
             tools,
             reasoning_effort: self.config.reasoning_effort.clone(),
+            fast: false,
         };
+        if self.config.fast {
+            request.apply_fast_mode();
+        }
         match self.ai.search(&request).await {
             Ok(_) => Probe::ok("grok responded"),
             Err(err) => Probe::failed(err.to_string()),
@@ -1473,7 +1490,7 @@ impl SearchService {
             }
         }
 
-        SearchRequest {
+        let mut request = SearchRequest {
             model: input
                 .model
                 .clone()
@@ -1489,7 +1506,12 @@ impl SearchService {
                 .reasoning_effort
                 .clone()
                 .or_else(|| self.config.reasoning_effort.clone()),
+            fast: false,
+        };
+        if resolve_fast(input.fast, self.config.fast) {
+            request.apply_fast_mode();
         }
+        request
     }
 }
 
@@ -2802,6 +2824,86 @@ mod transport_dispatch_tests {
         let report = svc.doctor().await;
         assert_eq!(report["provider"], "grok_responses");
         assert_eq!(report["grok"]["model"], "grok-4-1-fast-reasoning");
+        assert_eq!(report["grok"]["fast"], false);
+        assert_eq!(report["grok"]["fast_model"], "grok-chat-fast");
+    }
+
+    fn test_service(config: Config) -> SearchService {
+        SearchService {
+            default_model: resolve_default_model(&config),
+            config,
+            ai: Arc::new(FakeAiProvider),
+            source_slots: Arc::new(Vec::new()),
+            cache: Arc::new(Mutex::new(SourceCache::new(16))),
+            http_client: crate::providers::http::build_client(std::time::Duration::from_secs(30)),
+            source_router: Arc::new(crate::sources::SourceRouter::default()),
+        }
+    }
+
+    #[test]
+    fn build_search_request_fast_arg_pins_model_and_drops_effort() {
+        let config = Config::from_env_map([
+            ("GROK_SEARCH_API_KEY", "xai-fake"),
+            ("GROK_SEARCH_MODEL", "grok-4.20-multi-agent-0309"),
+            ("GROK_SEARCH_REASONING_EFFORT", "low"),
+            ("GROK_SEARCH_X_SEARCH", "true"),
+        ]);
+        let svc = test_service(config);
+        let req = svc.build_search_request(
+            &WebSearchInput {
+                query: "q".into(),
+                fast: Some(true),
+                reasoning_effort: Some("high".into()),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(req.model, "grok-chat-fast");
+        assert_eq!(req.reasoning_effort, None);
+        assert!(req.fast);
+    }
+
+    #[test]
+    fn build_search_request_fast_false_keeps_operator_model_even_if_config_fast() {
+        let config = Config::from_env_map([
+            ("GROK_SEARCH_API_KEY", "xai-fake"),
+            ("GROK_SEARCH_MODEL", "grok-4.20-multi-agent-0309"),
+            ("GROK_SEARCH_REASONING_EFFORT", "medium"),
+            ("GROK_SEARCH_FAST", "true"),
+        ]);
+        let svc = test_service(config);
+        let req = svc.build_search_request(
+            &WebSearchInput {
+                query: "q".into(),
+                fast: Some(false),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(req.model, "grok-4.20-multi-agent-0309");
+        assert_eq!(req.reasoning_effort.as_deref(), Some("medium"));
+        assert!(!req.fast);
+    }
+
+    #[test]
+    fn build_search_request_fast_from_config_when_tool_omits() {
+        let config = Config::from_env_map([
+            ("GROK_SEARCH_API_KEY", "xai-fake"),
+            ("GROK_SEARCH_MODEL", "grok-4.20-multi-agent-0309"),
+            ("GROK_SEARCH_REASONING_EFFORT", "low"),
+            ("GROK_SEARCH_FAST", "true"),
+        ]);
+        let svc = test_service(config);
+        let req = svc.build_search_request(
+            &WebSearchInput {
+                query: "q".into(),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert_eq!(req.model, "grok-chat-fast");
+        assert_eq!(req.reasoning_effort, None);
+        assert!(req.fast);
     }
 
     #[tokio::test]

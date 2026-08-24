@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+/// Web Fast channel model. Grok2API Web (`grok-chat-fast`) already runs hosted
+/// web/X search natively; Fast mode must not send `x_search` or `reasoning.effort`.
+pub const FAST_MODEL: &str = "grok-chat-fast";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub model: String,
@@ -12,6 +16,20 @@ pub struct SearchRequest {
     /// Values: `low` | `medium` | `high` | `xhigh`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Web Fast mode. When true the Responses payload pins [`FAST_MODEL`],
+    /// omits `reasoning`, and omits `x_search` (Web already searches).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
+}
+
+impl SearchRequest {
+    /// Pin this request to Web Fast mode. Callers that only have a bool should
+    /// use this rather than mutating the three fields independently.
+    pub fn apply_fast_mode(&mut self) {
+        self.model = FAST_MODEL.to_string();
+        self.reasoning_effort = None;
+        self.fast = true;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

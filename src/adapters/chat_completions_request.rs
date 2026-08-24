@@ -1,4 +1,4 @@
-use crate::model::search::{ContentBlock, SearchRequest};
+use crate::model::search::{ContentBlock, SearchRequest, FAST_MODEL};
 use serde_json::{json, Value};
 
 const DEFAULT_SYSTEM_HINT: &str = "You may search the web when helpful. \
@@ -36,6 +36,8 @@ pub fn to_chat_completions_payload(
         messages.push(json!({ "role": message.role, "content": content }));
     }
 
+    let model = if req.fast { FAST_MODEL } else { model };
+
     let mut payload = json!({
         "model": model,
         "messages": messages,
@@ -44,14 +46,16 @@ pub fn to_chat_completions_payload(
     if include_web_search_tool {
         payload["tools"] = json!([{ "type": "web_search" }]);
     }
-    if let Some(effort) = req
-        .reasoning_effort
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        // OpenAI-compatible / xAI chat completions: top-level string.
-        payload["reasoning_effort"] = json!(effort);
+    if !req.fast {
+        if let Some(effort) = req
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            // OpenAI-compatible / xAI chat completions: top-level string.
+            payload["reasoning_effort"] = json!(effort);
+        }
     }
     payload
 }

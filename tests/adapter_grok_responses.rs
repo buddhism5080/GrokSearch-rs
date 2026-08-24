@@ -12,6 +12,7 @@ fn sample_request() -> SearchRequest {
         }],
         tools: vec![SearchTool::web_search()],
         reasoning_effort: None,
+        fast: false,
     }
 }
 
@@ -49,6 +50,40 @@ fn grok_responses_payload_adds_x_search_only_when_enabled() {
 
     assert_eq!(payload["tools"][0]["type"], "web_search");
     assert_eq!(payload["tools"][1]["type"], "x_search");
+}
+
+#[test]
+fn grok_responses_payload_fast_mode_pins_model_and_omits_x_search_and_reasoning() {
+    let mut req = sample_request();
+    req.model = "grok-4.20-multi-agent-0309".into();
+    req.reasoning_effort = Some("high".into());
+    req.apply_fast_mode();
+
+    let payload = to_grok_responses_payload(&req, true, true).expect("payload");
+
+    assert_eq!(payload["model"], "grok-chat-fast");
+    let tools = payload["tools"].as_array().expect("tools");
+    assert_eq!(
+        tools.len(),
+        1,
+        "fast mode must not send x_search: {tools:?}"
+    );
+    assert_eq!(tools[0]["type"], "web_search");
+    assert!(
+        payload.get("reasoning").is_none(),
+        "fast mode must omit reasoning.effort, got {:?}",
+        payload.get("reasoning")
+    );
+}
+
+#[test]
+fn grok_responses_payload_non_fast_still_sends_x_search_when_enabled() {
+    let mut req = sample_request();
+    req.fast = false;
+    req.reasoning_effort = Some("low".into());
+    let payload = to_grok_responses_payload(&req, true, true).expect("payload");
+    assert_eq!(payload["tools"][1]["type"], "x_search");
+    assert_eq!(payload["reasoning"]["effort"], "low");
 }
 
 #[test]

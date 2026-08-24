@@ -84,6 +84,9 @@ const HEADER_TO_ENV: &[(&str, &str)] = &[
     // Non-secret: per-request reasoning intensity override. Absent header ->
     // the operator default (`GROK_SEARCH_REASONING_EFFORT`) or provider default.
     ("x-grok-reasoning-effort", "GROK_SEARCH_REASONING_EFFORT"),
+    // Non-secret: per-request Web Fast mode. true → grok-chat-fast, no
+    // reasoning.effort, no x_search. Absent header → operator default.
+    ("x-grok-fast", "GROK_SEARCH_FAST"),
 ];
 
 #[derive(Clone)]
@@ -707,6 +710,7 @@ mod tests {
                 ("X-Tavily-Api-Key", "tvly-caller"),
                 ("X-Grok-Model", "grok-caller-model"),
                 ("X-Grok-Reasoning-Effort", "xhigh"),
+                ("X-Grok-Fast", "true"),
             ]),
             None,
         );
@@ -714,10 +718,12 @@ mod tests {
         assert_eq!(cfg.tavily_api_key.as_deref(), Some("tvly-caller"));
         assert_eq!(cfg.grok_model, "grok-caller-model");
         assert_eq!(cfg.reasoning_effort.as_deref(), Some("xhigh"));
+        assert!(cfg.fast);
         // Absent model header -> operator default survives.
         let default_cfg = request_config(&base(), &headers(&[]), None);
         assert_eq!(default_cfg.grok_model, "grok-4-1-fast-reasoning");
         assert_eq!(default_cfg.reasoning_effort, None);
+        assert!(!default_cfg.fast);
     }
 
     #[test]

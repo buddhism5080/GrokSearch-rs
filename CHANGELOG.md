@@ -6,13 +6,14 @@ All notable changes to GrokSearch-rs are documented here.
 
 ### Added
 
-- **Web Fast mode (`web_search.fast`).** `fast=true` pins `grok-chat-fast`,
-  omits `reasoning.effort` / `reasoning_effort`, and omits the `x_search`
-  tool (grok2api Web already runs hosted web/X search; sending `x_search`
-  is `invalid_tools`). Precedence: tool arg `fast` > header `X-Grok-Fast` >
-  env `GROK_SEARCH_FAST` / TOML `fast` (default false). `fast=true` wins
-  over `reasoning_effort` if both are set. `doctor` reports `grok.fast`
-  and `grok.fast_model`.
+- **Two search tools.** `web_search` is the default Fast Web channel
+  (`grok-chat-fast`, no `reasoning.effort`, no `x_search` — grok2api Web
+  already runs hosted web/X search). `web_search_standard` is Console
+  multi-agent (`GROK_SEARCH_MODEL` / `X-Grok-Model`, optional
+  `reasoning_effort`, `x_search` when enabled). Schema lists `web_search`
+  first and tells callers to prefer it. The `fast` tool arg, `X-Grok-Fast`
+  header, and `GROK_SEARCH_FAST` env/TOML flag are gone. `doctor` reports
+  `grok.fast_model` and `grok.search_tools`.
 
 - **Per-request operator log on stderr.** Each `web_search` emits one
   line per phase (`start` / `grok_first` / `grok_completed` /

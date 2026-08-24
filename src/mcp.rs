@@ -134,8 +134,12 @@ async fn handle_request(service: &SearchService, request: Value) -> Result<Value
 async fn call_tool(service: &SearchService, name: &str, args: Value) -> Result<Value> {
     match name {
         "doctor" => Ok(service.doctor().await),
-        "web_search" => {
-            let input = parse_web_search_input(&args)?;
+        "web_search" | "web_search_standard" => {
+            let mut input = parse_web_search_input(&args)?;
+            // Tool identity selects the channel. `web_search` is Fast
+            // (grok-chat-fast, no reasoning, no x_search). `web_search_standard`
+            // is Console / operator model.
+            input.fast = name == "web_search";
             let output = service.web_search(input).await?;
             Ok(serde_json::to_value(output)
                 .map_err(|err| GrokSearchError::Parse(format!("serialize output: {err}")))?)
@@ -208,8 +212,8 @@ fn parse_web_search_input(args: &Value) -> Result<WebSearchInput> {
         // platform (issue #15) — it hallucinates names like `grok-4` that
         // override the operator's configured model. The model is fixed by
         // config (GROK_SEARCH_MODEL) or the per-request X-Grok-Model
-        // header, except Fast mode which pins grok-chat-fast via the
-        // boolean `fast` flag (not a free-form model name).
+        // header, except `web_search` which pins grok-chat-fast via the
+        // dispatcher (`input.fast`), not a free-form model name.
         platform: None,
         model: None,
         extra_sources: args
@@ -230,12 +234,62 @@ fn parse_web_search_input(args: &Value) -> Result<WebSearchInput> {
             .map(str::to_string),
         // Per-call reasoning intensity. Validated/normalized here so a
         // hallucinated value does not poison the upstream payload; bad
-        // values fall through to the server default. Ignored when fast=true.
+        // values fall through to the server default. Ignored by `web_search`
+        // (Fast). Honored by `web_search_standard`.
         reasoning_effort: args
             .get("reasoning_effort")
             .and_then(Value::as_str)
             .and_then(crate::config::parse_reasoning_effort),
-        fast: args.get("fast").and_then(Value::as_bool),
+        // Dispatcher overwrites this from the tool name.
+        fast: false,
+    })
+}
+
+fn search_input_schema(include_reasoning_effort: bool) -> Value {
+    let mut properties = json!({
+        "query": { "type": "string" },
+        "extra_sources": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional supplemental source count, served by the configured source chain (default order: Tavily, then Exa, TinyFish, Firecrawl — first provider with results wins; GROK_SEARCH_SOURCE_PROVIDERS overrides). If omitted, GROK_SEARCH_EXTRA_SOURCES is used."
+        },
+        "recency_days": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Restrict supplemental results to sources published within the last N days. Honored natively by Tavily (days+topic=news), Exa (startPublishedDate), and TinyFish (recency window); providers that cannot honor filters (Firecrawl) are skipped for filtered requests. Also hinted to Grok prompt."
+        },
+        "include_domains": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Only return supplemental results from these domains. Tavily/Exa/TinyFish honor strictly via native domain parameters; filter-blind providers are skipped. Grok receives as soft preference."
+        },
+        "exclude_domains": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Suppress supplemental results from these domains. Tavily/Exa/TinyFish honor strictly via native domain parameters; filter-blind providers are skipped. Grok receives as soft instruction."
+        },
+        "include_content": {
+            "type": "boolean",
+            "default": true,
+            "description": "Inline source content via the resolve_content pipeline. Default true. Pass false to get summary + source-list only (legacy behavior, no content field in sources). Superseded by response_format when both are set."
+        },
+        "response_format": {
+            "type": "string",
+            "enum": ["concise", "detailed"],
+            "description": "concise = synthesized answer + source metadata only (smallest payload); detailed = inline source content, subject to the response budget. Takes precedence over include_content."
+        }
+    });
+    if include_reasoning_effort {
+        properties["reasoning_effort"] = json!({
+            "type": "string",
+            "enum": ["low", "medium", "high", "xhigh"],
+            "description": "Per-call reasoning intensity for the Grok / OpenAI-compatible upstream. This tool is a powerful multi-agent deep search; higher effort scales agent count and latency, not answer length. low — simple fact lookup and known-part / official-page checks (enough for most lookups). medium — ordinary multi-source retrieval. high — comparisons, conflicting specs, multi-step research. xhigh — maximum multi-agent scale (e.g. grok-4.20-multi-agent). When omitted, uses the server default (GROK_SEARCH_REASONING_EFFORT / X-Grok-Reasoning-Effort)."
+        });
+    }
+    json!({
+        "type": "object",
+        "required": ["query"],
+        "properties": properties
     })
 }
 
@@ -244,54 +298,13 @@ fn tools_list() -> Value {
         "tools": [
             {
                 "name": "web_search",
-                "description": "Powerful multi-agent deep search. Use for discovery when you don't have a specific URL and need to find information, debug an error, research a topic, or track down an issue or news item. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only — drill into any of them with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=\"concise\" for answer + source metadata only. If you already know the exact page URL, use web_fetch instead. Set fast=true for the Web fast channel (grok-chat-fast, no reasoning_effort, no x_search). Otherwise set reasoning_effort: simple fact lookup → low (enough); comparisons / contradictions / multi-source research → high or xhigh. Omit both to use the server default.",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["query"],
-                    "properties": {
-                        "query": { "type": "string" },
-                        "extra_sources": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "description": "Optional supplemental source count, served by the configured source chain (default order: Tavily, then Exa, TinyFish, Firecrawl — first provider with results wins; GROK_SEARCH_SOURCE_PROVIDERS overrides). If omitted, GROK_SEARCH_EXTRA_SOURCES is used."
-                        },
-                        "recency_days": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Restrict supplemental results to sources published within the last N days. Honored natively by Tavily (days+topic=news), Exa (startPublishedDate), and TinyFish (recency window); providers that cannot honor filters (Firecrawl) are skipped for filtered requests. Also hinted to Grok prompt."
-                        },
-                        "include_domains": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Only return supplemental results from these domains. Tavily/Exa/TinyFish honor strictly via native domain parameters; filter-blind providers are skipped. Grok receives as soft preference."
-                        },
-                        "exclude_domains": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Suppress supplemental results from these domains. Tavily/Exa/TinyFish honor strictly via native domain parameters; filter-blind providers are skipped. Grok receives as soft instruction."
-                        },
-                        "include_content": {
-                            "type": "boolean",
-                            "default": true,
-                            "description": "Inline source content via the resolve_content pipeline. Default true. Pass false to get summary + source-list only (legacy behavior, no content field in sources). Superseded by response_format when both are set."
-                        },
-                        "response_format": {
-                            "type": "string",
-                            "enum": ["concise", "detailed"],
-                            "description": "concise = synthesized answer + source metadata only (smallest payload); detailed = inline source content, subject to the response budget. Takes precedence over include_content."
-                        },
-                        "reasoning_effort": {
-                            "type": "string",
-                            "enum": ["low", "medium", "high", "xhigh"],
-                            "description": "Per-call reasoning intensity for the Grok / OpenAI-compatible upstream. This tool is a powerful multi-agent deep search; higher effort scales agent count and latency, not answer length. low — simple fact lookup and known-part / official-page checks (enough for most lookups). medium — ordinary multi-source retrieval. high — comparisons, conflicting specs, multi-step research. xhigh — maximum multi-agent scale (e.g. grok-4.20-multi-agent). When omitted, uses the server default (GROK_SEARCH_REASONING_EFFORT / X-Grok-Reasoning-Effort). Ignored when fast=true.",
-                        },
-                        "fast": {
-                            "type": "boolean",
-                            "default": false,
-                            "description": "Web Fast mode. true → grok-chat-fast, omit reasoning_effort, omit x_search (Web already searches natively). Use for simple/current-fact lookups on the Web fast channel instead of Console multi-agent. false/omit → operator model (GROK_SEARCH_MODEL / X-Grok-Model) with optional reasoning_effort. Fast wins over reasoning_effort if both are set. Precedence: this arg > X-Grok-Fast > GROK_SEARCH_FAST."
-                        }
-                    }
-                }
+                "description": "DEFAULT search. Fast Web channel (grok-chat-fast). Prefer this over web_search_standard for ordinary lookups, current facts, news, and discovery when you don't have a specific URL. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only — drill into any of them with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=\"concise\" for answer + source metadata only. If you already know the exact page URL, use web_fetch instead. Does not take reasoning_effort (Web fast ignores it) and does not send x_search (Web already searches natively).",
+                "inputSchema": search_input_schema(false)
+            },
+            {
+                "name": "web_search_standard",
+                "description": "Standard/deep Console multi-agent search. Prefer web_search for ordinary lookups. Use this only when fast is not enough: comparisons, contradictions, multi-step research, or when you need X/Twitter search. Use for discovery when you don't have a specific URL. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only — drill into any of them with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=\"concise\" for answer + source metadata only. If you already know the exact page URL, use web_fetch instead. Set reasoning_effort: simple fact lookup → low (enough); comparisons / contradictions / multi-source research → high or xhigh. Omit to use the server default.",
+                "inputSchema": search_input_schema(true)
             },
             {
                 "name": "get_sources",
@@ -528,9 +541,13 @@ mod tests {
                 .to_string()
         };
 
-        // web_search: discovery-type cue, explicit no-URL case; must NOT
-        // recommend itself for single-page reads (that's web_fetch's job).
+        // web_search: DEFAULT fast channel. Discovery cue, no single-page-read role.
         let web_search = desc("web_search");
+        assert!(web_search.contains("DEFAULT"), "web_search: {web_search}");
+        assert!(
+            web_search.contains("grok-chat-fast"),
+            "web_search: {web_search}"
+        );
         assert!(web_search.contains("discovery"), "web_search: {web_search}");
         assert!(
             web_search.contains("don't have a specific URL"),
@@ -541,20 +558,31 @@ mod tests {
             "web_search must not claim the single-page-read role: {web_search}"
         );
         assert!(
-            web_search.contains("multi-agent"),
-            "web_search must name itself as multi-agent search: {web_search}"
+            web_search.contains("web_search_standard"),
+            "web_search must point at the standard tool: {web_search}"
+        );
+
+        // web_search_standard: multi-agent, effort steering, prefer fast first.
+        let standard = desc("web_search_standard");
+        assert!(
+            standard.contains("multi-agent"),
+            "web_search_standard: {standard}"
         );
         assert!(
-            web_search.contains("simple fact lookup"),
-            "web_search must steer simple lookups to low: {web_search}"
+            standard.contains("simple fact lookup"),
+            "web_search_standard must steer simple lookups to low: {standard}"
+        );
+        assert!(
+            standard.contains("Prefer web_search"),
+            "web_search_standard: {standard}"
         );
 
         let effort = {
             let tools = listed["tools"].as_array().expect("tools array");
             tools
                 .iter()
-                .find(|t| t["name"] == "web_search")
-                .expect("web_search")["inputSchema"]["properties"]["reasoning_effort"]
+                .find(|t| t["name"] == "web_search_standard")
+                .expect("web_search_standard")["inputSchema"]["properties"]["reasoning_effort"]
                 ["description"]
                 .as_str()
                 .expect("reasoning_effort description")
@@ -614,33 +642,65 @@ mod tests {
         // advertise them, so the client never learns they exist.
         let listed = tools_list();
         let tools = listed["tools"].as_array().expect("tools array");
+        assert_eq!(
+            tools[0]["name"], "web_search",
+            "DEFAULT search tool must be listed first"
+        );
+        for name in ["web_search", "web_search_standard"] {
+            let tool = tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap_or_else(|| panic!("{name} tool present"));
+            let props = tool["inputSchema"]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} inputSchema.properties object"));
+
+            assert!(
+                !props.contains_key("model"),
+                "{name} must not expose `model`: {props:?}"
+            );
+            assert!(
+                !props.contains_key("platform"),
+                "{name} must not expose `platform`: {props:?}"
+            );
+            assert!(
+                !props.contains_key("fast"),
+                "{name} must not expose `fast`: {props:?}"
+            );
+            assert!(
+                props.contains_key("query"),
+                "{name} query must remain: {props:?}"
+            );
+            assert!(
+                props.contains_key("response_format"),
+                "{name} response_format must remain: {props:?}"
+            );
+        }
+
         let web_search = tools
             .iter()
             .find(|t| t["name"] == "web_search")
-            .expect("web_search tool present");
-        let props = web_search["inputSchema"]["properties"]
+            .expect("web_search");
+        let fast_props = web_search["inputSchema"]["properties"]
             .as_object()
-            .expect("web_search inputSchema.properties object");
+            .expect("web_search properties");
+        assert!(
+            !fast_props.contains_key("reasoning_effort"),
+            "web_search must not expose reasoning_effort: {fast_props:?}"
+        );
 
+        let standard = tools
+            .iter()
+            .find(|t| t["name"] == "web_search_standard")
+            .expect("web_search_standard");
+        let std_props = standard["inputSchema"]["properties"]
+            .as_object()
+            .expect("web_search_standard properties");
         assert!(
-            !props.contains_key("model"),
-            "web_search must not expose `model`: {props:?}"
+            std_props.contains_key("reasoning_effort"),
+            "web_search_standard must expose reasoning_effort: {std_props:?}"
         );
-        assert!(
-            !props.contains_key("platform"),
-            "web_search must not expose `platform`: {props:?}"
-        );
-        // Guard against an over-broad deletion: the real parameters stay.
-        assert!(props.contains_key("query"), "query must remain: {props:?}");
-        assert!(
-            props.contains_key("response_format"),
-            "response_format must remain: {props:?}"
-        );
-        assert!(
-            props.contains_key("reasoning_effort"),
-            "reasoning_effort must be exposed: {props:?}"
-        );
-        let effort_enum = props["reasoning_effort"]["enum"]
+        let effort_enum = std_props["reasoning_effort"]["enum"]
             .as_array()
             .expect("reasoning_effort enum");
         for level in ["low", "medium", "high", "xhigh"] {
@@ -649,15 +709,10 @@ mod tests {
                 "missing {level} in {effort_enum:?}"
             );
         }
-        assert!(
-            props.contains_key("fast"),
-            "fast must be exposed: {props:?}"
-        );
-        assert_eq!(props["fast"]["type"], "boolean");
     }
 
     #[test]
-    fn parse_web_search_input_reads_fast_bool() {
+    fn parse_web_search_input_ignores_fast_arg() {
         let input = parse_web_search_input(&json!({
             "query": "capital of France",
             "fast": true,
@@ -665,30 +720,39 @@ mod tests {
         }))
         .expect("parse");
         assert_eq!(input.query, "capital of France");
-        assert_eq!(input.fast, Some(true));
+        assert!(!input.fast, "fast is dispatcher-owned, not a tool arg");
         assert_eq!(input.reasoning_effort.as_deref(), Some("high"));
     }
 
     #[test]
-    fn parse_web_search_input_omits_fast_when_absent() {
+    fn parse_web_search_input_defaults_fast_false() {
         let input = parse_web_search_input(&json!({ "query": "q" })).expect("parse");
-        assert_eq!(input.fast, None);
+        assert!(!input.fast);
     }
 
     #[test]
-    fn tools_list_mentions_fast_mode() {
+    fn tools_list_splits_fast_and_standard() {
         let listed = tools_list();
         let tools = listed["tools"].as_array().expect("tools array");
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(
+            names.contains(&"web_search") && names.contains(&"web_search_standard"),
+            "expected both search tools, got {names:?}"
+        );
         let web_search = tools
             .iter()
             .find(|t| t["name"] == "web_search")
             .expect("web_search");
         let desc = web_search["description"].as_str().expect("desc");
-        assert!(desc.contains("fast=true"), "web_search: {desc}");
+        assert!(desc.contains("DEFAULT"), "web_search: {desc}");
         assert!(desc.contains("grok-chat-fast"), "web_search: {desc}");
-        let fast = &web_search["inputSchema"]["properties"]["fast"]["description"];
-        let fast = fast.as_str().expect("fast description");
-        assert!(fast.contains("x_search"), "{fast}");
-        assert!(fast.contains("reasoning_effort"), "{fast}");
+        assert!(desc.contains("x_search"), "web_search: {desc}");
+        let standard = tools
+            .iter()
+            .find(|t| t["name"] == "web_search_standard")
+            .expect("web_search_standard");
+        let std_desc = standard["description"].as_str().expect("desc");
+        assert!(std_desc.contains("multi-agent"), "{std_desc}");
+        assert!(std_desc.contains("Prefer web_search"), "{std_desc}");
     }
 }

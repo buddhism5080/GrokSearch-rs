@@ -21,7 +21,6 @@ fn config_reads_grok_search_responses_defaults() {
     assert_eq!(cfg.timeout.as_secs(), 60);
     assert_eq!(cfg.grok_auth_mode, AuthMode::ApiKey);
     assert_eq!(cfg.reasoning_effort, None);
-    assert!(!cfg.fast);
 }
 
 #[test]
@@ -34,18 +33,6 @@ fn config_reads_reasoning_effort() {
 
     let bad = Config::from_env_map([("GROK_SEARCH_REASONING_EFFORT", "ultra")]);
     assert_eq!(bad.reasoning_effort, None);
-}
-
-#[test]
-fn config_reads_fast_flag() {
-    let on = Config::from_env_map([("GROK_SEARCH_FAST", "true")]);
-    assert!(on.fast);
-    let yes = Config::from_env_map([("GROK_SEARCH_FAST", "YES")]);
-    assert!(yes.fast);
-    let off = Config::from_env_map([("GROK_SEARCH_FAST", "false")]);
-    assert!(!off.fast);
-    let default = Config::from_env_map([("GROK_SEARCH_API_KEY", "x")]);
-    assert!(!default.fast);
 }
 
 #[test]

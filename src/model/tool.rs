@@ -22,11 +22,13 @@ pub struct WebSearchInput {
     /// Per-call reasoning intensity override: `low` | `medium` | `high` |
     /// `xhigh`. When set, beats the server default
     /// (`GROK_SEARCH_REASONING_EFFORT` / `X-Grok-Reasoning-Effort`).
+    /// Ignored when `fast` is true (`web_search`); used by `web_search_standard`.
     pub reasoning_effort: Option<String>,
-    /// Per-call Web Fast mode. `Some(true)` pins `grok-chat-fast`, drops
-    /// reasoning, and drops `x_search`. `Some(false)` forces the operator
-    /// model even if `GROK_SEARCH_FAST` is on. `None` uses the server default.
-    pub fast: Option<bool>,
+    /// Set by the MCP dispatcher, not a tool argument. `web_search` → true
+    /// (pin `grok-chat-fast`, omit reasoning / `x_search`).
+    /// `web_search_standard` → false (operator model).
+    #[serde(default)]
+    pub fast: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
